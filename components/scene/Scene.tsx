@@ -12,8 +12,7 @@ import { Director } from "./Director";
 import { StudioEnvironment } from "./StudioEnvironment";
 import { Floor } from "./Floor";
 import { BackdropType } from "./BackdropType";
-import { PourStream } from "./PourStream";
-import { Splash } from "./Splash";
+import { Backlight } from "./Backlight";
 import { Compositor } from "./Compositor";
 import { bottleRefs } from "./bottleRefs";
 import { AnchorProjector } from "./AnchorProjector";
@@ -135,9 +134,8 @@ export default function Scene({ fontsReady, onReady }: Props) {
       <StudioEnvironment resolution={tier === "high" ? 256 : 128} />
       <BackdropType mobile={mobile} fontsReady={fontsReady} />
       <Bottle tier={tier} fontsReady={fontsReady} />
-      <Floor />
-      <PourStream tier={tier} />
-      <Splash tier={tier} />
+      <Floor mobile={mobile} />
+      <Backlight mobile={mobile} />
       <Compositor tier={tier} fontsReady={fontsReady} onFirstFrames={onReady} />
       <AnchorProjector />
     </Canvas>

@@ -4,8 +4,6 @@
  * and must never trigger reconciliation.
  */
 
-export const MAX_LENS_DROPS = 32;
-
 export type PourState = {
   /** Linear timeline clock in seconds — drives time-based particle motion. */
   clock: number;
@@ -66,12 +64,6 @@ export const sceneState = {
   /** Hero typography opacity inside WebGL, tied to the reveal. */
   typeIn: 0,
   pour: createPourState(),
-  /**
-   * Lens drops: x, y (0..1 screen), hit time (clock seconds), radius (fraction
-   * of viewport height). Filled at impact from the actual droplet trajectories.
-   */
-  lens: new Float32Array(MAX_LENS_DROPS * 4),
-  lensCount: 0,
   /** DOM elements whose position is driven by projecting bottle points. */
   anchors: [] as { el: HTMLElement; y: number }[],
   anchorsVisible: 0,
@@ -81,5 +73,4 @@ export const sceneState = {
 
 export function resetPour() {
   Object.assign(sceneState.pour, createPourState());
-  sceneState.lensCount = 0;
 }

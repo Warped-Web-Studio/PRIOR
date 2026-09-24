@@ -86,18 +86,18 @@ export const pour = {
   fall: 0.62,
   /** Lens drops begin landing this long after impact. */
   lensLead: 0.38,
-  /** Splash wall rises over the lens. */
-  sheetAt: 2.34,
-  sheet: 0.95,
+  /** Splash wall rises over the lens, after the first drops have landed. */
+  sheetAt: 2.62,
+  sheet: 0.8,
   /** Environment swaps while the viewport is fully covered. */
-  swapAt: 3.34,
+  swapAt: 3.46,
   swap: 0.3,
   /** Water slides off the lens, revealing the inquiry. */
-  recedeAt: 3.5,
+  recedeAt: 3.62,
   recede: 1.35,
   /** Inquiry typography starts as the water passes. */
-  inquiryAt: 3.72,
-  total: 5.2,
+  inquiryAt: 3.8,
+  total: 5.4,
   /** Cinematic gravity — deliberately slower than real, like a high-speed camera. */
   gravity: 6.2,
 } as const;
@@ -163,7 +163,7 @@ export const desktopPourPose: PourPose = {
   tilt: 2.02,
   cam: [0.12, 0.05, 10.6],
   look: [0.08, -0.2, 0],
-  push: [-0.3, -0.55, -2.1],
+  push: [-0.3, -0.6, -3.1],
   fov: 28,
 };
 
@@ -172,7 +172,7 @@ export const mobilePourPose: PourPose = {
   tilt: 2.12,
   cam: [0.05, 0.05, 15.4],
   look: [0.0, 0.05, 0],
-  push: [-0.2, -0.8, -3.2],
+  push: [-0.2, -0.9, -4.4],
   fov: 30,
 };
 
