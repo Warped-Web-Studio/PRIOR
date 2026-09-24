@@ -8,9 +8,10 @@ import { bottleDims, pour as timing } from "@/lib/motion";
 import { getState, type Tier } from "@/lib/store";
 import { compositorFragment, compositorVertex } from "./shaders/compositor";
 import { FluidSim, SIM_CONFIG, type SimContext } from "./fluid/sim";
-import { FluidRenderer } from "./fluid/FluidRenderer";
 import { LensWater } from "./fluid/LensWater";
 import { FloorWetness, floorWet } from "./fluid/FloorWetness";
+import { PourStream } from "./fluid/PourStream";
+import { DropletRenderer } from "./fluid/DropletRenderer";
 import { rig } from "./rig";
 
 type Props = { tier: Tier; onFirstFrames: () => void; fontsReady: boolean };
@@ -18,7 +19,8 @@ type Props = { tier: Tier; onFirstFrames: () => void; fontsReady: boolean };
 /**
  * Owns rendering (priority 1). Per frame:
  *   studio scene → HDR target
- *   (pour live) particle sim → screen-space fluid over the studio → mip-mapped target
+ *   (pour live) particle sim; the pour column swept through it and drawn
+ *     over the studio (MSAA); splash drops over that → mip-mapped target
  *   (water on the lens) lens-film simulation step
  *   final pass: tone map, inquiry environment, lens water, grain
  * When nothing is pouring, only the first and last run.
@@ -36,7 +38,7 @@ export function Compositor({ tier, onFirstFrames, fontsReady }: Props) {
       depthBuffer: true,
       stencilBuffer: false,
     });
-    // Studio + fluid, with a mip chain so thick lens water can blur it.
+    // Studio + pour + splash, with a mip chain so thick lens water can blur it.
     const finalRT = new THREE.WebGLRenderTarget(1, 1, {
       type: THREE.HalfFloatType,
       depthBuffer: false,
@@ -50,10 +52,11 @@ export function Compositor({ tier, onFirstFrames, fontsReady }: Props) {
   const water = useMemo(() => {
     const cfg = SIM_CONFIG[tier];
     const sim = new FluidSim(cfg);
-    const fluid = new FluidRenderer(sim, high ? 0.75 : 0.5, cfg.streamRadius);
     const lens = new LensWater(high ? 400 : 260);
     const wetness = new FloorWetness(sim, high ? 256 : 160);
-    return { sim, fluid, lens, wetness };
+    const stream = new PourStream(tier);
+    const drops = new DropletRenderer(sim);
+    return { sim, lens, wetness, stream, drops };
   }, [tier, high]);
 
   // Quad, material and scene are built together: Strict Mode runs memos
@@ -93,18 +96,27 @@ export function Compositor({ tier, onFirstFrames, fontsReady }: Props) {
     const h = Math.max(1, Math.floor(size.height * viewportDpr));
     targets.sceneRT.setSize(w, h);
     targets.finalRT.setSize(w, h);
-    water.fluid.setSize(w, h);
+    water.stream.setSize(w, h);
     water.lens.setAspect(w / h);
     material.uniforms.uRes.value.set(w, h);
   }, [size, viewportDpr, targets, water, material]);
+
+  const camera = useThree((s) => s.camera);
+  useEffect(() => {
+    water.stream.warm(gl, camera);
+    water.drops.warm(gl, camera, targets.finalRT);
+    water.wetness.warm(gl);
+    water.lens.warm(gl);
+  }, [gl, camera, water, targets]);
 
   useEffect(
     () => () => {
       targets.sceneRT.dispose();
       targets.finalRT.dispose();
-      water.fluid.dispose();
       water.lens.dispose();
       water.wetness.dispose();
+      water.stream.dispose();
+      water.drops.dispose();
     },
     [targets, water],
   );
@@ -121,6 +133,7 @@ export function Compositor({ tier, onFirstFrames, fontsReady }: Props) {
     (window as unknown as { __compositor?: unknown }).__compositor = { ...targets, ...water, quadScene };
   }, [targets, water, quadScene]);
 
+  const focusPoint = useMemo(() => new THREE.Vector3(), []);
   const frames = useRef(0);
   const inquiryClock = useRef(0);
   const lastClock = useRef(0);
@@ -144,7 +157,7 @@ export function Compositor({ tier, onFirstFrames, fontsReady }: Props) {
     const u = material.uniforms;
     const camera = state.camera as THREE.PerspectiveCamera;
     const renderStudio = p.swap < 0.999;
-    const { sim, fluid, lens } = water;
+    const { sim, lens } = water;
 
     // A new pour (or a return) restarts the clock: clear the glass.
     if (p.clock < lastClock.current - 0.25) lens.markDirty();
@@ -172,8 +185,18 @@ export function Compositor({ tier, onFirstFrames, fontsReady }: Props) {
       }
       water.wetness.render(gl);
       floorWet.on = 1;
-      fluid.backlight = p.quiet * (1 - p.swap);
-      fluid.render(gl, state.scene, camera, targets.sceneRT.texture, targets.finalRT);
+      const backlight = p.quiet * (1 - p.swap);
+      const envRot = state.scene.environmentRotation.y;
+      const { stream } = water;
+      stream.update(sim, sim.time, ctx.floorY, ctx.gravity);
+      let behind = targets.sceneRT.texture;
+      if (stream.visible) {
+        stream.render(gl, camera, behind, envRot, backlight);
+        behind = stream.target.texture;
+      }
+      // Focus sits on the pour: halfway between the lip and where it lands.
+      focusPoint.copy(rig.mouth).lerp(sim.impactAt === Infinity ? rig.mouth : sim.impact, 0.5).applyMatrix4(camera.matrixWorldInverse);
+      water.drops.render(gl, camera, behind, targets.finalRT, envRot, backlight, Math.max(-focusPoint.z, 0.5));
       studioTex = targets.finalRT.texture;
       lod = 1;
     }

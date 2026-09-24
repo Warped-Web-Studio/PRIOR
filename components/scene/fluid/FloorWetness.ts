@@ -80,8 +80,8 @@ export class FloorWetness {
 
   render(gl: THREE.WebGLRenderer) {
     this.wetAttr.needsUpdate = true;
-    // Positions are uploaded by the fluid renderer's geometry already; this
-    // geometry shares the same array, so flag it too.
+    // Positions live in the sim's array, shared with the droplet renderer;
+    // each geometry uploads its own copy.
     (this.points.geometry.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
     const prev = gl.getRenderTarget();
     const autoClear = gl.autoClear;
@@ -94,6 +94,14 @@ export class FloorWetness {
     gl.setRenderTarget(prev);
     gl.autoClear = autoClear;
     gl.setClearColor(this.prevClear, alpha);
+  }
+
+  /** Compile ahead of the first pour so it never hitches. */
+  warm(gl: THREE.WebGLRenderer) {
+    const prev = gl.getRenderTarget();
+    gl.setRenderTarget(this.rt);
+    gl.compile(this.scene, this.cam);
+    gl.setRenderTarget(prev);
   }
 
   dispose() {

@@ -80,8 +80,11 @@ export const pour = {
   lift: 1.25,
   tiltAt: 0.62,
   tilt: 1.35,
-  /** Water reaches the lip and the stream head leaves the bottle. */
-  streamAt: 1.18,
+  /**
+   * Water leaves the bottle as the neck passes horizontal — where the tilt
+   * curve slows. Earlier, the stream hangs above a lip that is still falling.
+   */
+  streamAt: 1.36,
   /** Seconds for the stream head to fall to the floor (slow-motion gravity). */
   fall: 0.62,
   /** Lens drops begin landing this long after impact. */

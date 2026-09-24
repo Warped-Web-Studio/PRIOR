@@ -11,9 +11,16 @@ import { mulberry32 } from "../textures";
  * lens-water simulation at its projected position. The splash on the glass
  * is caused by the splash in the scene, particle for particle.
  *
- * No neighbour search: the screen-space renderer merges overlapping spheres
- * into one liquid surface, which is what makes this cheap enough for a
- * browser (a few thousand particles, one loop per step).
+ * No neighbour search — a few thousand particles, one loop per step. Sheet
+ * and spray drops are drawn individually by DropletRenderer; film particles
+ * paint the floor's wetness map.
+ *
+ * The falling column itself is *not* drawn from particles — spheres spread
+ * apart as the stream accelerates and bead into a sawtooth ribbon. Instead
+ * every step records a slice (lip position, exit velocity, flow) and
+ * PourStream sweeps a continuous surface through those slices' ballistic
+ * paths. Stream particles still fly the same paths, invisibly, so the
+ * splash happens exactly where the column lands.
  */
 
 export const enum Kind {
@@ -51,9 +58,17 @@ export const SIM_CONFIG: Record<"high" | "low", SimConfig> = {
 };
 
 const STEP = 1 / 120;
+/** Slices kept for the column: the whole pour at STEP, with headroom. */
+export const SLICE_CAP = 512;
 const LENS_DEPTH = 0.42; // view-space distance at which a particle "lands" on the lens
 const POUR_SPEED = 0.78;
 const EMIT_RADIUS = 0.04;
+/** Stream centre sits this far inside the lower lip (neck bore is 0.13). */
+const LIP_INSET = 0.07;
+/** Guards the inherited lip velocity against timeline seeks. */
+const MAX_LIP_SPEED = 3;
+/** Share of the lip's sideways motion the water carries away. */
+const LIP_CARRY = 0.35;
 const POUR_LENGTH = 2.7; // seconds of flow after the lip is reached
 
 export class FluidSim {
@@ -62,8 +77,9 @@ export class FluidSim {
   readonly radius: Float32Array;
   /** Film particles don't render as spheres; they paint the floor's wetness map. */
   readonly wet: Float32Array;
-  private vel: Float32Array;
-  private kind: Uint8Array;
+  /** Velocity and kind are read by the renderers (droplets streak along velocity). */
+  readonly vel: Float32Array;
+  readonly kind: Uint8Array;
   private bounce: Uint8Array;
   // Lens-bound particles follow an analytic path solved at launch.
   private launchP: Float32Array;
@@ -77,6 +93,15 @@ export class FluidSim {
   impactAt = Infinity;
   readonly impact = new THREE.Vector3(0, -1.3, 0);
   splats: Splat[] = [];
+
+  /** Ring buffer of emitted slices, newest at sliceHead - 1. */
+  readonly sliceT = new Float32Array(SLICE_CAP);
+  readonly sliceP = new Float32Array(SLICE_CAP * 3);
+  readonly sliceV = new Float32Array(SLICE_CAP * 3);
+  /** Flow at the lip, relative to full flow. */
+  readonly sliceQ = new Float32Array(SLICE_CAP);
+  sliceHead = 0;
+  sliceCount = 0;
 
   private cursor = 0;
   private emitCarry = 0;
@@ -113,6 +138,11 @@ export class FluidSim {
     this.emitCarry = 0;
     this.rand = mulberry32(417);
     this.splats.length = 0;
+    this.sliceHead = 0;
+    this.sliceCount = 0;
+    this.hasPose = false;
+    this.lipVel.set(0, 0, 0);
+    this.lipTarget.set(0, 0, 0);
   }
 
   /** Advance to `clock` in fixed steps. Seeking backwards re-simulates. */
@@ -120,8 +150,51 @@ export class FluidSim {
     if (clock < this.time - 1e-4) this.reset();
     // Never try to catch up more than half a second in one frame.
     if (clock - this.time > 0.5) this.time = clock - 0.5;
-    while (this.time + STEP <= clock) this.step(STEP, ctx);
+    // The bottle moved once this frame but several steps run; sweep the lip
+    // across them, or slices stack at one spot and the column staircases.
+    const from = this.time;
+    const span = clock - from;
+    if (!this.hasPose) {
+      this.lastMouth.copy(ctx.mouth);
+      this.lastDir.copy(ctx.mouthDir);
+      this.hasPose = true;
+    }
+    this.frameMouth.copy(ctx.mouth);
+    this.frameDir.copy(ctx.mouthDir);
+    // The lip's own velocity, which the water inherits as it leaves.
+    // Smoothed: uneven frame times would otherwise kink the column.
+    if (span > 1e-4) {
+      this.lipTarget.subVectors(this.frameMouth, this.lastMouth).divideScalar(span);
+      if (this.lipTarget.length() > MAX_LIP_SPEED) this.lipTarget.setLength(MAX_LIP_SPEED);
+    }
+    const lipFrom = this.lipFrom.copy(this.lipVel);
+    const lipK = 1 - Math.exp(-span / 0.08);
+    const stepCtx = this.stepCtx;
+    Object.assign(stepCtx, ctx);
+    stepCtx.mouth = this.stepMouth;
+    stepCtx.mouthDir = this.stepDir;
+    while (this.time + STEP <= clock) {
+      const f = span > 0 ? (this.time + STEP - from) / span : 1;
+      this.stepMouth.lerpVectors(this.lastMouth, this.frameMouth, f);
+      this.stepDir.lerpVectors(this.lastDir, this.frameDir, f).normalize();
+      this.lipVel.copy(lipFrom).lerp(this.lipTarget, lipK * f);
+      this.step(STEP, stepCtx);
+    }
+    this.lastMouth.copy(this.frameMouth);
+    this.lastDir.copy(this.frameDir);
   }
+
+  private hasPose = false;
+  private lastMouth = new THREE.Vector3();
+  private lastDir = new THREE.Vector3();
+  private frameMouth = new THREE.Vector3();
+  private frameDir = new THREE.Vector3();
+  private stepMouth = new THREE.Vector3();
+  private stepDir = new THREE.Vector3();
+  private stepCtx = {} as SimContext;
+  private lipVel = new THREE.Vector3();
+  private lipFrom = new THREE.Vector3();
+  private lipTarget = new THREE.Vector3();
 
   private alloc() {
     const i = this.cursor;
@@ -133,7 +206,9 @@ export class FluidSim {
   private flowRate(t: number, drain: number) {
     const s = t;
     if (s < 0 || s > POUR_LENGTH) return 0;
-    const ramp = Math.min(1, 0.55 + s / 0.08);
+    // A full bottle's first release is a gush — no air has got in yet —
+    // before settling into the glug rhythm.
+    const ramp = Math.min(1, 0.7 + s / 0.06) * (1 + 0.4 * Math.exp(-s / 0.14));
     const glug = 0.84 + 0.1 * Math.sin(s * 26.4) + 0.06 * Math.sin(s * 11.3 + 1.7);
     const tail = Math.min(1, (POUR_LENGTH - s) / 0.4);
     return this.cfg.rate * ramp * glug * tail * (1 - drain * 0.25);
@@ -143,36 +218,73 @@ export class FluidSim {
     const since = this.time - ctx.streamAt;
     const rate = this.flowRate(since, ctx.drain);
     if (rate <= 0) return;
+
+    // Water leaves over the *lower* lip, not along the neck's axis: while
+    // the neck still points above horizontal a full bottle already pours,
+    // sheeting over the rim and falling. It never leaves upward.
+    const d = ctx.mouthDir;
+    const down = this.tmp.set(d.x * d.y, d.y * d.y - 1, d.z * d.y);
+    if (down.lengthSq() < 1e-6) down.set(0, -1, 0);
+    down.normalize();
+    const lx = ctx.mouth.x + down.x * LIP_INSET;
+    const ly = ctx.mouth.y + down.y * LIP_INSET;
+    const lz = ctx.mouth.z + down.z * LIP_INSET;
+    const hl = Math.hypot(d.x, d.z) || 1;
+    const sp = POUR_SPEED * Math.min(Math.max(hl, 0.45), 1);
+    // Water keeps the motion of the lip it leaves: a bottle still swinging
+    // down throws its first water down with it rather than leaving it
+    // hanging in the air above.
+    const lv = this.lipVel;
+    // (Sideways swing is only partly passed on: taken whole, the tilt curve's
+    // peak speed whips the first water out as a thin horizontal thread.)
+    const ex = (d.x / hl) * sp + lv.x * LIP_CARRY;
+    const ey = Math.min(d.y, 0) * POUR_SPEED + Math.min(lv.y, 0) * 0.85;
+    const ez = (d.z / hl) * sp + lv.z * LIP_CARRY;
+
+    const k = this.sliceHead;
+    this.sliceT[k] = this.time;
+    this.sliceP[k * 3] = lx;
+    this.sliceP[k * 3 + 1] = ly;
+    this.sliceP[k * 3 + 2] = lz;
+    this.sliceV[k * 3] = ex;
+    this.sliceV[k * 3 + 1] = ey;
+    this.sliceV[k * 3 + 2] = ez;
+    this.sliceQ[k] = rate / this.cfg.rate;
+    this.sliceHead = (k + 1) % SLICE_CAP;
+    this.sliceCount = Math.min(this.sliceCount + 1, SLICE_CAP);
+
     this.emitCarry += rate * dt;
     const n = Math.floor(this.emitCarry);
     this.emitCarry -= n;
     if (n === 0) return;
 
-    const d = ctx.mouthDir;
-    this.side.set(0, 0, 1).cross(d);
+    const evl = Math.hypot(ex, ey, ez) || 1;
+    this.fwd.set(ex / evl, ey / evl, ez / evl);
+    this.side.set(0, 0, 1).cross(this.fwd);
     if (this.side.lengthSq() < 1e-4) this.side.set(1, 0, 0);
     this.side.normalize();
-    this.up.copy(d).cross(this.side).normalize();
+    this.up.copy(this.fwd).cross(this.side).normalize();
     const r = this.rand;
-    for (let k = 0; k < n; k++) {
+    for (let j = 0; j < n; j++) {
       const i = this.alloc();
       const a = r() * Math.PI * 2;
-      // Water leaves on the lower lip first: bias the disc toward gravity.
       const rr = Math.sqrt(r()) * EMIT_RADIUS;
       const ox = Math.cos(a) * rr;
       const oy = Math.sin(a) * rr;
+      // Spread emission across the step so particles don't leave in clumps.
+      const lag = r() * dt;
       const o = i * 3;
-      this.pos[o] = ctx.mouth.x + this.side.x * ox + this.up.x * oy;
-      this.pos[o + 1] = ctx.mouth.y + this.side.y * ox + this.up.y * oy - 0.01;
-      this.pos[o + 2] = ctx.mouth.z + this.side.z * ox + this.up.z * oy;
-      const sp = POUR_SPEED * (0.9 + r() * 0.2);
-      this.vel[o] = d.x * sp + (r() - 0.5) * 0.018;
-      this.vel[o + 1] = d.y * sp + (r() - 0.5) * 0.018;
-      this.vel[o + 2] = d.z * sp + (r() - 0.5) * 0.018;
+      this.vel[o] = ex + (r() - 0.5) * 0.018;
+      this.vel[o + 1] = ey + (r() - 0.5) * 0.018;
+      this.vel[o + 2] = ez + (r() - 0.5) * 0.018;
+      this.pos[o] = lx + this.side.x * ox + this.up.x * oy - this.vel[o] * lag;
+      this.pos[o + 1] = ly + this.side.y * ox + this.up.y * oy - this.vel[o + 1] * lag;
+      this.pos[o + 2] = lz + this.side.z * ox + this.up.z * oy - this.vel[o + 2] * lag;
       this.kind[i] = Kind.Stream;
       this.wet[i] = 0;
       this.bounce[i] = 0;
-      this.radius[i] = this.cfg.streamRadius * (0.85 + r() * 0.3);
+      // Invisible: the column is drawn by PourStream.
+      this.radius[i] = 0;
     }
   }
 
@@ -194,7 +306,7 @@ export class FluidSim {
       let x = this.pos[o];
       let y = this.pos[o + 1];
       let z = this.pos[o + 2];
-      const rad = this.radius[i];
+      const rad = kind === Kind.Stream ? this.cfg.streamRadius : this.radius[i];
 
       if (kind === Kind.Lens) {
         // Ballistic path to an aim point on the lens, corrected for the
@@ -206,6 +318,10 @@ export class FluidSim {
         x = this.launchP[o] + this.launchV[o] * tau + (cam.position.x - this.launchCam[o]) * kk;
         y = this.launchP[o + 1] + this.launchV[o + 1] * tau - 0.5 * g * tau * tau + (cam.position.y - this.launchCam[o + 1]) * kk;
         z = this.launchP[o + 2] + this.launchV[o + 2] * tau + (cam.position.z - this.launchCam[o + 2]) * kk;
+        // Kept for the droplet renderer's motion streak.
+        this.vel[o] = this.launchV[o];
+        this.vel[o + 1] = this.launchV[o + 1] - g * tau;
+        this.vel[o + 2] = this.launchV[o + 2];
       } else if (kind === Kind.Film) {
         // A thin film spreading on stone: friction, then rest.
         const damp = Math.exp(-3.2 * dt);
@@ -250,9 +366,9 @@ export class FluidSim {
 
       // Reaching the lens: view-space depth from the camera.
       const vz = -(view[2] * x + view[6] * y + view[10] * z + view[14]);
-      // Drops racing at the camera thin out of the fluid render just before
-      // they land; the lens film takes over the moment they arrive.
-      if (kind === Kind.Lens) this.radius[i] = this.baseR[i] * Math.min(Math.max((vz - LENS_DEPTH) / 1.4, 0.15), 1);
+      // Drops racing at the camera thin slightly before they land (their
+      // defocus already makes them large); the lens film takes over on arrival.
+      if (kind === Kind.Lens) this.radius[i] = this.baseR[i] * Math.min(Math.max((vz - LENS_DEPTH) / 0.8, 0.4), 1);
       if (kind !== Kind.Film && vz < LENS_DEPTH) {
         if (vz > 0.02) {
           const vx = view[0] * x + view[4] * y + view[8] * z + view[12];
@@ -324,7 +440,8 @@ export class FluidSim {
       this.vel[o + 1] = s * (0.14 + r() * 0.1);
       this.vel[o + 2] = dz * h;
       this.kind[i] = Kind.Sheet;
-      this.radius[i] *= 0.7;
+      // Splash drops follow a steep size distribution: many fine, few large.
+      this.radius[i] = this.cfg.streamRadius * (0.18 + 0.72 * r() * r());
     } else if (u < 0.88) {
       // Film: the spreading puddle — fat, flat particles that merge.
       const h = s * (0.24 + r() * 0.12);

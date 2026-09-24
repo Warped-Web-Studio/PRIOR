@@ -227,6 +227,14 @@ export class LensWater {
     gl.setRenderTarget(null);
   }
 
+  /** Compile ahead of the first pour so it never hitches. */
+  warm(gl: THREE.WebGLRenderer) {
+    const prev = gl.getRenderTarget();
+    gl.setRenderTarget(this.b);
+    gl.compile(this.scene, this.cam);
+    gl.setRenderTarget(prev);
+  }
+
   markDirty() {
     this.dirty = true;
   }
