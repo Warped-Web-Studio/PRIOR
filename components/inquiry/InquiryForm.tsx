@@ -128,10 +128,13 @@ export function InquiryForm() {
       ))}
 
       <div className="form__submit" data-inquiry-reveal>
-        <button type="submit" className="submit" disabled={pending} aria-busy={pending}>
+        <button type="submit" className="submit" disabled={pending} aria-busy={pending} aria-describedby="form-privacy">
           <span className="submit__label display">{pending ? inquiry.pending : inquiry.submit}</span>
           <span className="submit__rule" aria-hidden="true" />
         </button>
+        <p className="form__note" id="form-privacy">
+          {inquiry.privacy}
+        </p>
       </div>
     </form>
   );

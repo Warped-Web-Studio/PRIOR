@@ -673,6 +673,13 @@ body {
 .form__submit {
   padding-top: 8px;
 }
+.form__note {
+  margin: 14px 0 0;
+  max-width: 44ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--graphite-soft);
+}
 .submit {
   display: grid;
   gap: 12px;

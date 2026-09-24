@@ -12,8 +12,6 @@ export function Header({ inert }: { inert: boolean }) {
       </a>
       <p className="masthead__meta mono">
         <span>{brand.draw} draw</span>
-        <span aria-hidden="true">·</span>
-        <span>{brand.bottles} bottles</span>
       </p>
       <button type="button" className="masthead__cta" onClick={() => requestPour()}>
         Request access

@@ -5,11 +5,14 @@ import { composition } from "@/lib/brand";
 import { sceneState } from "@/lib/sceneState";
 import { useExperience } from "@/lib/store";
 
+/** Only rows with a height on the bottle are pinned to it. */
+const callouts = composition.minerals.filter((m): m is typeof m & { at: number } => m.at !== undefined);
+
 /**
  * Technical-drawing callouts pinned to the bottle's silhouette. Their
  * positions are written every frame by the scene (projecting points on the
  * glass), so they stay attached through scroll, resize and easing. The
- * readable version of this data lives in the chapter's <dl>.
+ * full, readable analysis lives in the chapter's <dl>.
  */
 export function SpecAnnotations() {
   const root = useRef<HTMLDivElement>(null);
@@ -19,7 +22,7 @@ export function SpecAnnotations() {
     const el = root.current;
     if (!el) return;
     const rows = Array.from(el.querySelectorAll<HTMLElement>("[data-anchor]"));
-    sceneState.anchors = rows.map((row, i) => ({ el: row, y: composition.minerals[i].at }));
+    sceneState.anchors = rows.map((row, i) => ({ el: row, y: callouts[i].at }));
     return () => {
       sceneState.anchors = [];
     };
@@ -29,7 +32,7 @@ export function SpecAnnotations() {
 
   return (
     <div ref={root} className="annotations" aria-hidden="true" data-annotations>
-      {composition.minerals.map((m) => (
+      {callouts.map((m) => (
         <div key={m.key} className="annotation" data-anchor>
           <span className="annotation__tick" />
           <span className="annotation__rule" />

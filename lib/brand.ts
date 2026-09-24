@@ -10,7 +10,6 @@ export const brand = {
   age: "11,400",
   draw: "2026",
   edition: "Nº 0417 / 2400",
-  bottles: "2,400",
 } as const;
 
 export const hero = {
@@ -26,20 +25,39 @@ export const age = {
   meta: "Radiocarbon dated · Uppsala, 2019",
 };
 
+type Mineral = {
+  key: string;
+  value: string;
+  unit: string;
+  /**
+   * Height along the bottle body in local units (see bottleGeometry) for
+   * the rows pinned to the 3D object. Rows without it appear only in the
+   * readable list.
+   */
+  at?: number;
+};
+
+// A believable analysis: charges balance (cations 0.385, anions 0.386
+// meq/L), and dry residue sits below the ion sum because bicarbonate
+// gives up about half its mass as CO₂ and water when evaporated at 180 °C.
+const minerals: Mineral[] = [
+  { key: "Silica", value: "18.2", unit: "mg/L", at: 0.42 },
+  { key: "Bicarbonate", value: "19.6", unit: "mg/L", at: 0.12 },
+  { key: "Calcium", value: "4.1", unit: "mg/L", at: -0.18 },
+  { key: "Magnesium", value: "0.9", unit: "mg/L", at: -0.48 },
+  { key: "Sodium", value: "2.2", unit: "mg/L" },
+  { key: "Potassium", value: "0.4", unit: "mg/L" },
+  { key: "Chloride", value: "1.4", unit: "mg/L" },
+  { key: "Sulphate", value: "1.2", unit: "mg/L" },
+  { key: "Dry residue at 180 °C", value: "38", unit: "mg/L", at: -0.78 },
+  { key: "pH at source", value: "7.4", unit: "", at: -1.04 },
+];
+
 export const composition = {
   index: "II",
   title: "Composition, as drawn",
   note: "Nothing added. Nothing removed. Measured at the wellhead.",
-  // `at` is a height along the bottle body in local units (see bottleGeometry)
-  // so the annotations can be projected from the actual 3D object.
-  minerals: [
-    { key: "Silica", value: "21.0", unit: "mg/L", at: 0.42 },
-    { key: "Bicarbonate", value: "12.2", unit: "mg/L", at: 0.12 },
-    { key: "Calcium", value: "4.1", unit: "mg/L", at: -0.18 },
-    { key: "Magnesium", value: "0.9", unit: "mg/L", at: -0.48 },
-    { key: "Total dissolved solids", value: "38", unit: "mg/L", at: -0.78 },
-    { key: "pH at source", value: "7.4", unit: "", at: -1.04 },
-  ],
+  minerals,
 };
 
 export const ritual = {
@@ -69,6 +87,7 @@ export const inquiry = {
   },
   optional: "Optional",
   submit: "Enter the register",
+  privacy: "The register keeps nothing. PRIOR is a concept; what you enter is neither stored nor shared.",
   pending: "Entering",
   successTitle: "You are in the register.",
   successBody:

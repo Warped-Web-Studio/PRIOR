@@ -26,8 +26,12 @@ import {
 // initial bundle; the DOM (copy, CTA, form) renders and hydrates first.
 const Scene = dynamic(() => import("@/components/scene/Scene"), { ssr: false });
 
-/** Longest we'll hold the veil before showing whatever is ready. */
-const READY_TIMEOUT = 9000;
+/**
+ * Longest we'll hold the veil before showing whatever is ready. The copy is
+ * in the server HTML regardless; this only bounds how long a slow device
+ * looks at the veil.
+ */
+const READY_TIMEOUT = 4000;
 
 export function Experience() {
   const phase = useExperience((s) => s.phase);
